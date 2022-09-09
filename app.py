@@ -6,10 +6,11 @@ import time
 START_ENERGY = 30
 START_DEAD_BODIES = 1
 SPAWN_PROB_PER_DEAD = 1 / 10000
-DAY_LIGHT_CYCLE_SPEED = 1 / 1000  # screens per tick
+DAY_LIGHT_CYCLE_SPEED = 1 / 10000  # screens per tick
 
 MUTATION_FACTOR = 0.5
-BRAIN_HIDDEN_LAYER_SIZE = 10
+BRAIN_HIDDEN_LAYER_SIZE = 32
+EAT_PROB = 0.2
 
 MOVE_ENERGY_COST = 1
 ROTATE_ENERGY_COST = 0.5
@@ -18,9 +19,10 @@ PHOTO_ENERGY_COST = 0.25
 REPRODUCE_ENERGY_COST = 1
 
 PHOTO_ENERGY_GAIN = 1
-EAT_ENERGY_GAIN = 10
+EAT_ENERGY_GAIN = 0
 
 ENERGY_REPRODUCE_FACTOR = 0.2
+MIN_ENERGY_TO_REPRODUCE = 10
 
 MIN_ENERGY_BEFORE_DIE = 0
 MAX_ENERGY_BEFORE_DIE = 500
@@ -103,7 +105,7 @@ class World:
             self._light_intensity_grid[i] = [0] * size[1]
         self._dead_bodies_grid = [[START_DEAD_BODIES] * size[1] for _ in range(size[0])]
 
-        self._draw_layers = [True, True, True]
+        self._draw_layers = [False, True, False]
 
         self._size = size
         self._age_ticks = 0
@@ -222,8 +224,9 @@ class Agent:
         # act = lambda x: np.array(2 * (x > 0) - 1, dtype=float)
         # act = lambda x: 2 * x * (x > 0) + 0.5 * x * (x <= 0)
 
-        self._brain = brain or AgentBrain([AgentBrainLayer(16, BRAIN_HIDDEN_LAYER_SIZE, act, mutation_factor),
-                                           AgentBrainLayer(BRAIN_HIDDEN_LAYER_SIZE, BRAIN_HIDDEN_LAYER_SIZE, act, mutation_factor),
+        self._brain = brain or AgentBrain([AgentBrainLayer(17, BRAIN_HIDDEN_LAYER_SIZE, act, mutation_factor),
+                                           # AgentBrainLayer(BRAIN_HIDDEN_LAYER_SIZE, BRAIN_HIDDEN_LAYER_SIZE, act, mutation_factor),
+                                           # AgentBrainLayer(BRAIN_HIDDEN_LAYER_SIZE, BRAIN_HIDDEN_LAYER_SIZE, act, mutation_factor),
                                            AgentBrainLayer(BRAIN_HIDDEN_LAYER_SIZE, 6, act, mutation_factor)])
 
         self._direction = np.random.randint(0, 4)  # 0 - up, 1 - right, 2 - down, 3 - left
@@ -303,7 +306,7 @@ class Agent:
     def _eat(self, agent):
         self._energy -= EAT_ENERGY_COST
         if agent is not None:
-            prob = 1  # 1 / (1 + np.exp((-self._energy - 10 + agent.get_energy()) / 10))
+            prob = EAT_PROB  # 1 / (1 + np.exp((-self._energy - 10 + agent.get_energy()) / 10))
             if np.random.random() <= prob:
                 self._energy += agent.get_energy() + EAT_ENERGY_GAIN
                 agent.kill()
@@ -312,9 +315,9 @@ class Agent:
 
     def _reproduce(self):
         self._energy -= REPRODUCE_ENERGY_COST
-        new_color = (self._color + np.random.randint(-1, 1, 3)) * np.random.uniform(0.9, 1.1, 3)
+        new_color = (self._color + np.random.randint(-2, 2, 3))
         new_color = np.array([min(255, max(new_color[i], 0)) for i in range(3)])
-        new_agent = Agent(*self._get_back_position(), self._energy * ENERGY_REPRODUCE_FACTOR, new_color, brain=self._brain.replicate())
+        new_agent = Agent(*self._get_front_position(), self._energy * ENERGY_REPRODUCE_FACTOR, new_color, brain=self._brain.replicate())
         return new_agent
 
     def update(self, world_to_read, world_to_write):
@@ -326,7 +329,7 @@ class Agent:
         #           world_to_read.get_light_intensity(self._position),
         #           *(np.arange(0, 6, 1) == self._last_action),
         #           self._last_action_success)
-        energy_features = (self._energy < 10, 10 <= self._energy < 100, 100 <= self._energy < 450, self._energy >= 450)
+        energy_features = (self._energy < MIN_ENERGY_TO_REPRODUCE, MIN_ENERGY_TO_REPRODUCE <= self._energy < 100, 100 <= self._energy < 450, self._energy >= 450)
         inputs = (*energy_features,
                   world_to_read.get_agent(self._get_front_position()) is not None,
                   world_to_read.get_agent(self._get_back_position()) is not None,
@@ -334,7 +337,8 @@ class Agent:
                   world_to_read.get_agent(self._get_left_position()) is not None,
                   world_to_read.get_light_intensity(self._position),
                   *(np.arange(0, 6, 1) == self._last_action),
-                  self._last_action_success)
+                  self._last_action_success,
+                  world_to_read.get_light_intensity(self._get_front_position()))
         action = self._brain.get_action(*inputs)
         # print(action)
         # action = np.random.randint(0, 6)
@@ -353,7 +357,7 @@ class Agent:
             self._last_action_success = self._photo(world_to_read.get_light_intensity(self._position))
         elif action == 5:
             new_agent = self._reproduce()
-            if self._energy >= 10:
+            if self._energy >= MIN_ENERGY_TO_REPRODUCE:
                 if world_to_write.add_agent(new_agent) is not None:
                     self._energy *= (1 - ENERGY_REPRODUCE_FACTOR)
                     self._last_action_success = True
